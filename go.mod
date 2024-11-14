@@ -1,4 +1,4 @@
-module go-excel-parser
+module github.com/eclipsemode/go-excel-phone-parser
 
 go 1.23.2
 
