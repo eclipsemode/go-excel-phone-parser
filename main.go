@@ -15,7 +15,7 @@ import (
 
 const (
 	DataPath = "./data"
-	City     = "Армавир"
+	City     = "Москва"
 	FromDate = 2021
 	ToDate   = 2024
 )
@@ -26,9 +26,9 @@ const (
 //
 // City specifies a city looking for.
 //
-// From describes the year from looking process start.
+// From describes the year the search starts from.
 //
-// To describes the last year looking process.
+// To describes the last year in which the search ends.
 type FlagOptions struct {
 	Path string
 	City string
@@ -37,13 +37,10 @@ type FlagOptions struct {
 }
 
 func main() {
-	dataPath := flag.String("path", DataPath, "Path for xlsx files")
-	city := flag.String("city", City, "City")
-	fromDate := flag.Int("from", FromDate, "From date")
-	toDate := flag.Int("to", ToDate, "To date")
-	flag.Parse()
+	fmt.Println("Parsing flags...")
+	options := readFlags()
 
-	entries, err := os.ReadDir(*dataPath)
+	entries, err := os.ReadDir(options.Path)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -53,14 +50,68 @@ func main() {
 	var wgAllPhones sync.WaitGroup
 	wgAllPhones.Add(len(entries))
 
+	fmt.Println("Reading spreadsheets...")
 	for _, entry := range entries {
-		go appendAllNumbers(&wgAllPhones, &muAllPhones, entry, &allPhones, FlagOptions{*dataPath, *city, *fromDate, *toDate})
+		go appendAllNumbers(&wgAllPhones, &muAllPhones, entry, &allPhones, options)
 	}
 
 	wgAllPhones.Wait()
-	fmt.Println(len(allPhones))
+	fmt.Println("Removing repetitions...")
+	err = removeRepetitions(&allPhones)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	fmt.Println("Writing result xlsx file...")
+	err = writeResultPhones(&allPhones)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	fmt.Printf("Done: %d phones parsed.\n", len(allPhones))
 }
 
+func writeResultPhones(phones *[]string) error {
+	f := excelize.NewFile()
+	defer func() {
+		if err := f.Close(); err != nil {
+			log.Fatal(err)
+		}
+	}()
+
+	index, err := f.NewSheet("Sheet1")
+	if err != nil {
+		return err
+	}
+
+	f.SetActiveSheet(index)
+
+	for i, phone := range *phones {
+		err := f.SetCellValue("Sheet1", fmt.Sprintf("A%d", i+1), phone)
+		if err != nil {
+			return err
+		}
+	}
+
+	if err := f.SaveAs("./result/base.xlsx"); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// readFlags read flags (path, city, from and to).
+func readFlags() FlagOptions {
+	dataPath := flag.String("path", DataPath, "Path for xlsx files")
+	city := flag.String("city", City, "City")
+	fromDate := flag.Int("from", FromDate, "From date")
+	toDate := flag.Int("to", ToDate, "To date")
+	flag.Parse()
+
+	return FlagOptions{*dataPath, *city, *fromDate, *toDate}
+}
+
+// readSpreadsheets reading spreadsheets in xlsx format
 func readSpreadsheets(fileName string, options FlagOptions) []string {
 	f, err := excelize.OpenFile(fmt.Sprintf("%s/%s", options.Path, fileName))
 	if err != nil {
@@ -92,6 +143,7 @@ func readSpreadsheets(fileName string, options FlagOptions) []string {
 	return result
 }
 
+// appendAllNumbers append to array string all numbers from all entries in directory.
 func appendAllNumbers(wg *sync.WaitGroup, mu *sync.Mutex, entry os.DirEntry, allPhones *[]string, options FlagOptions) {
 	defer wg.Done()
 	if !entry.IsDir() {
@@ -103,6 +155,7 @@ func appendAllNumbers(wg *sync.WaitGroup, mu *sync.Mutex, entry os.DirEntry, all
 	}
 }
 
+// appendColumnNumbers append all number in xlsx file column.
 func appendColumnNumbers(
 	city string,
 	date string,
@@ -135,6 +188,7 @@ func appendColumnNumbers(
 	mutex.Unlock()
 }
 
+// parsePhone formatting phone number to format +X(XXX)XXX-XX-XX.
 func parsePhone(phone string) (string, error) {
 	re := regexp.MustCompile("[^0-9]")
 
@@ -169,6 +223,7 @@ func parsePhone(phone string) (string, error) {
 	return resultPhone, nil
 }
 
+// getLastOrderYear returning the last year when the order was carried out.
 func getLastOrderYear(date string) (int, error) {
 	if date == "" {
 		return 0, fmt.Errorf("date is empty")
@@ -186,4 +241,40 @@ func getLastOrderYear(date string) (int, error) {
 	}
 
 	return intYear, nil
+}
+
+// removeRepetitions removes similar phone numbers from string of array.
+func removeRepetitions(phones *[]string) error {
+	uniquePhones := make(map[string]struct{})
+	chPhone := make(chan string)
+
+	var mu sync.Mutex
+
+	var result []string
+
+	go func() {
+		defer close(chPhone)
+
+		for _, phone := range *phones {
+			mu.Lock()
+			if _, ok := uniquePhones[phone]; !ok {
+				uniquePhones[phone] = struct{}{}
+				chPhone <- phone
+			}
+			mu.Unlock()
+		}
+	}()
+
+	for {
+		phone, opened := <-chPhone
+		if !opened {
+			break
+		}
+
+		result = append(result, phone)
+	}
+
+	*phones = result
+
+	return nil
 }
