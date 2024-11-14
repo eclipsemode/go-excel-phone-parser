@@ -1,3 +1,5 @@
+BINARY=app
+
 run:
-	@go build -o app ./main.go
-	@./app
+	@go build -o $(BINARY) ./main.go
+	@./$(BINARY) --path $(path)

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"github.com/xuri/excelize/v2"
 	"log"
@@ -19,8 +20,30 @@ const (
 	ToDate   = 2024
 )
 
+// FlagOptions define the options for flags.
+//
+// Path specifies the path for xlsx files folder.
+//
+// City specifies a city looking for.
+//
+// From describes the year from looking process start.
+//
+// To describes the last year looking process.
+type FlagOptions struct {
+	Path string
+	City string
+	From int
+	To   int
+}
+
 func main() {
-	entries, err := os.ReadDir(DataPath)
+	dataPath := flag.String("path", DataPath, "Path for xlsx files")
+	city := flag.String("city", City, "City")
+	fromDate := flag.Int("from", FromDate, "From date")
+	toDate := flag.Int("to", ToDate, "To date")
+	flag.Parse()
+
+	entries, err := os.ReadDir(*dataPath)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -31,15 +54,15 @@ func main() {
 	wgAllPhones.Add(len(entries))
 
 	for _, entry := range entries {
-		go appendAllNumbers(&wgAllPhones, &muAllPhones, entry, &allPhones)
+		go appendAllNumbers(&wgAllPhones, &muAllPhones, entry, &allPhones, FlagOptions{*dataPath, *city, *fromDate, *toDate})
 	}
 
 	wgAllPhones.Wait()
 	fmt.Println(len(allPhones))
 }
 
-func readSpreadsheets(path string, fileName string) []string {
-	f, err := excelize.OpenFile(fmt.Sprintf("%s/%s", path, fileName))
+func readSpreadsheets(fileName string, options FlagOptions) []string {
+	f, err := excelize.OpenFile(fmt.Sprintf("%s/%s", options.Path, fileName))
 	if err != nil {
 		panic(err)
 	}
@@ -62,17 +85,17 @@ func readSpreadsheets(path string, fileName string) []string {
 	wg.Add(len(phones))
 
 	for i := 0; i < len(phones); i++ {
-		go appendColumnNumbers(cities[i], dates[i], phones[i], &result, &wg, &mu)
+		go appendColumnNumbers(cities[i], dates[i], phones[i], &result, &wg, &mu, options)
 	}
 
 	wg.Wait()
 	return result
 }
 
-func appendAllNumbers(wg *sync.WaitGroup, mu *sync.Mutex, entry os.DirEntry, allPhones *[]string) {
+func appendAllNumbers(wg *sync.WaitGroup, mu *sync.Mutex, entry os.DirEntry, allPhones *[]string, options FlagOptions) {
 	defer wg.Done()
 	if !entry.IsDir() {
-		phones := readSpreadsheets(DataPath, entry.Name())
+		phones := readSpreadsheets(entry.Name(), options)
 
 		mu.Lock()
 		*allPhones = append(*allPhones, phones...)
@@ -80,9 +103,17 @@ func appendAllNumbers(wg *sync.WaitGroup, mu *sync.Mutex, entry os.DirEntry, all
 	}
 }
 
-func appendColumnNumbers(city string, date string, phone string, res *[]string, wg *sync.WaitGroup, mutex *sync.Mutex) {
+func appendColumnNumbers(
+	city string,
+	date string,
+	phone string,
+	res *[]string,
+	wg *sync.WaitGroup,
+	mutex *sync.Mutex,
+	options FlagOptions,
+) {
 	defer wg.Done()
-	if city != City {
+	if city != options.City {
 		return
 	}
 
@@ -91,7 +122,7 @@ func appendColumnNumbers(city string, date string, phone string, res *[]string, 
 		return
 	}
 
-	if year < FromDate || year > ToDate {
+	if year < options.From || year > options.To {
 		return
 	}
 	parsedPhone, err := parsePhone(phone)
